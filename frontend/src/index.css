@@ -1,0 +1,21 @@
+@import "tailwindcss";
+
+@plugin "@tailwindcss/typography";
+
+@theme {
+  --color-brand-dark: #0f172a;
+  --color-brand-surface: #1e293b;
+  --color-brand-accent: #4f46e5;
+}
+
+body {
+  @apply bg-brand-surface text-slate-200;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-700 rounded-full;
+}
