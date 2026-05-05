@@ -1,6 +1,10 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: '' })
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || ''
+
+const api = axios.create({
+  baseURL: BACKEND_URL,
+})
 
 export const uploadDocument = async (file) => {
   const formData = new FormData()

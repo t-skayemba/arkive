@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # App Settings
     app_name: str = "RAG Knowledge Base"
     version: str = "1.0.0"
-    cors_origins: list = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: list = ["http://localhost:3000", "http://localhost:5173", "https://arkive.tianakayemba.dev"]
 
     class Config:
         env_file = ".env"
