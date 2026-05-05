@@ -14,7 +14,7 @@ sentence-transformers==2.7.0
 chromadb>=0.5.3
 
 # Anthropic Claude
-anthropic==0.26.1
+anthropic>=0.40.0
 
 # Utilities
 python-dotenv==1.0.1
