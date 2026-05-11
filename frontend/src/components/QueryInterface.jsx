@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
-import { Send, Sparkles, Copy, Check, ShieldCheck } from 'lucide-react'
-import { queryKnowledgeBase } from '../utils/api'
+import { Send, Sparkles, Copy, Check, ShieldCheck, Filter } from 'lucide-react'
+import { queryKnowledgeBase, listDocuments } from '../utils/api'
 import SourceCard from './SourceCard'
 import ReactMarkdown from 'react-markdown'
 
@@ -14,15 +14,6 @@ const SkeletonResponse = () => (
       <div className="h-3 bg-white/10 rounded animate-pulse w-full" />
       <div className="h-3 bg-white/10 rounded animate-pulse w-4/5" />
       <div className="h-3 bg-white/10 rounded animate-pulse w-3/5" />
-    </div>
-    <div className="grid grid-cols-2 gap-3 w-full">
-      {[1, 2].map(i => (
-        <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
-          <div className="h-2 bg-white/10 rounded animate-pulse w-1/3" />
-          <div className="h-3 bg-white/10 rounded animate-pulse w-2/3" />
-          <div className="h-2 bg-white/10 rounded animate-pulse w-full" />
-        </div>
-      ))}
     </div>
   </div>
 )
@@ -43,7 +34,7 @@ const CopyButton = ({ text }) => {
     setTimeout(() => setCopied(false), 2000)
   }
   return (
-    <button onClick={copy} className="text-slate-600 hover:text-slate-300 transition-colors mt-1" title="Copy to clipboard">
+    <button onClick={copy} className="text-slate-600 hover:text-slate-300 transition-colors mt-1" title="Copy">
       {copied ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
     </button>
   )
@@ -53,7 +44,14 @@ export default function QueryInterface({ onQuery }) {
   const [input, setInput] = useState('')
   const [chat, setChat] = useState([])
   const [loading, setLoading] = useState(false)
+  const [documents, setDocuments] = useState([])
+  const [selectedDocId, setSelectedDocId] = useState('')
   const bottomRef = useRef(null)
+
+  // Load document list for the filter dropdown
+  useEffect(() => {
+    listDocuments().then(data => setDocuments(data.documents)).catch(() => {})
+  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -63,17 +61,22 @@ export default function QueryInterface({ onQuery }) {
     if (!input.trim() || loading) return
     const q = input.trim()
     setInput('')
-    setChat(p => [...p, { role: 'user', content: q }])
+
+    // Show which document is being searched (if filtered)
+    const filterLabel = selectedDocId
+      ? documents.find(d => d.document_id === selectedDocId)?.filename
+      : null
+
+    setChat(p => [...p, { role: 'user', content: q, filter: filterLabel }])
     setLoading(true)
 
     try {
-      const res = await queryKnowledgeBase(q)
+      const res = await queryKnowledgeBase(q, 25, selectedDocId || null)
       setChat(p => [...p, {
         role: 'assistant',
         content: res.answer,
         sources: res.sources
       }])
-      // ← passes BOTH scores and full sources back to App
       onQuery?.(res.sources?.map(s => s.relevance_score) || [], res.sources || [])
     } catch (err) {
       const errMsg = err.response?.data?.detail || 'Something went wrong. Check that your backend is running.'
@@ -86,6 +89,7 @@ export default function QueryInterface({ onQuery }) {
   return (
     <div className="flex flex-col h-[calc(100vh-80px)] bg-brand-surface rounded-2xl border border-white/5 shadow-2xl overflow-hidden">
 
+      {/* Header */}
       <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0">
         <h2 className="text-lg font-bold flex items-center gap-3">
           <Sparkles className="text-brand-accent" size={20} />
@@ -101,6 +105,7 @@ export default function QueryInterface({ onQuery }) {
         </div>
       </div>
 
+      {/* Messages */}
       <div className="flex-1 overflow-y-auto p-8 space-y-8">
         {chat.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center h-full text-center gap-4 opacity-40">
@@ -116,8 +121,15 @@ export default function QueryInterface({ onQuery }) {
           <div key={i} className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
 
             {msg.role === 'user' && (
-              <div className="bg-brand-accent text-white rounded-2xl rounded-tr-none px-5 py-3 max-w-lg text-sm leading-relaxed">
-                {msg.content}
+              <div className="flex flex-col items-end gap-1">
+                {msg.filter && (
+                  <span className="text-[10px] text-indigo-400 flex items-center gap-1">
+                    <Filter size={10} /> searching in {msg.filter}
+                  </span>
+                )}
+                <div className="bg-brand-accent text-white rounded-2xl rounded-tr-none px-5 py-3 max-w-lg text-sm leading-relaxed">
+                  {msg.content}
+                </div>
               </div>
             )}
 
@@ -135,7 +147,6 @@ export default function QueryInterface({ onQuery }) {
                     )}
                   </div>
                   <div className="flex items-start gap-2 w-full">
-                    {/* ← ReactMarkdown renders **bold**, ## headers, lists properly */}
                     <div className="bg-white/5 border border-white/10 rounded-2xl rounded-tl-none px-5 py-4 text-sm leading-relaxed flex-1 prose prose-invert prose-sm max-w-none">
                       <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
@@ -165,13 +176,38 @@ export default function QueryInterface({ onQuery }) {
         <div ref={bottomRef} />
       </div>
 
-      <div className="p-6 bg-white/[0.02] border-t border-white/5 shrink-0">
+      {/* Input area */}
+      <div className="p-6 bg-white/[0.02] border-t border-white/5 shrink-0 space-y-3">
+
+        {/* Document filter */}
+        {documents.length > 1 && (
+          <div className="flex items-center gap-2">
+            <Filter size={12} className="text-slate-500 shrink-0" />
+            <select
+              value={selectedDocId}
+              onChange={e => setSelectedDocId(e.target.value)}
+              className="flex-1 bg-black/20 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-brand-accent/50 transition-all"
+            >
+              <option value="">Search all documents</option>
+              {documents.map(doc => (
+                <option key={doc.document_id} value={doc.document_id}>
+                  {doc.filename}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Input bar */}
         <div className="flex gap-3 items-center bg-black/30 border border-white/10 rounded-xl px-4 py-3 focus-within:border-brand-accent/50 transition-all">
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && ask()}
-            placeholder="Ask a question about your documents..."
+            placeholder={selectedDocId
+              ? `Ask about ${documents.find(d => d.document_id === selectedDocId)?.filename}...`
+              : "Ask a question about your documents..."
+            }
             className="flex-1 bg-transparent text-sm text-slate-200 placeholder-slate-600 outline-none border-none ring-0 focus:ring-0"
           />
           <button
@@ -182,7 +218,7 @@ export default function QueryInterface({ onQuery }) {
             <Send size={16} />
           </button>
         </div>
-        <p className="text-[10px] text-slate-700 mt-2 text-center">
+        <p className="text-[10px] text-slate-700 text-center">
           Answers are grounded in your uploaded documents only
         </p>
       </div>

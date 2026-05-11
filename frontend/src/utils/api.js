@@ -30,7 +30,9 @@ export const getDocumentContent = async (documentId) => {
   return res.data
 }
 
-export const queryKnowledgeBase = async (question, topK = 5) => {
-  const res = await api.post('/query/', { question, top_k: topK })
+export const queryKnowledgeBase = async (question, topK = 5, documentId = null) => {
+  const body = { question, top_k: topK }
+  if (documentId) body.document_id = documentId
+  const res = await api.post('/query/', body)
   return res.data
 }
