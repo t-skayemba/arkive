@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
 
     # Langfuse Observability
-    langufuse_public_key: str = ""
+    langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = "https://cloud.langfuse.com"
 

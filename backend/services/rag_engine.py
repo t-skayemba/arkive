@@ -13,12 +13,12 @@ def _get_langfuse():
     Returns a Langfuse client if keys are configured, otherwise None.
     This way the app works fine even without Langfuse keys set.
     """
-    if not settings.langufuse_public_key or not settings.langfuse_secret_key:
+    if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         return None
     try:
         from langfuse import Langfuse
         return Langfuse(
-            public_key=settings.langufuse_public_key,
+            public_key=settings.langfuse_public_key,
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
         )
