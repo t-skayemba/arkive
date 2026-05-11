@@ -64,42 +64,97 @@ class DocumentProcessor:
             raise ValueError(f"Unsupported file tupe: {file_type}")
         
     def _extract_pdf(self, file_path: Path) -> List[dict]:
-        from pypdf import PdfReader
-        reader = PdfReader(str(file_path))
-        pages = []
-        for i, page in enumerate(reader.pages):
-            text = page.extract_text() or ""
-            if text.strip():
-                pages.append({"page_number": i + 1, "text": self._clean_text(text)})
-        return pages
+        try:
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(str(file_path))
+            if reader.is_encrypted:
+                raise ValueError("PDF is password-protected. Please remove the password and re-upload.")
+            pages = []
+            for i, page in enumerate(reader.pages):
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages.append({"page_number": i + 1, "text": self._clean_text(text)})
+            if not pages:
+                raise ValueError(
+                    "No text could be extracted from this PDF. "
+                    "It may be a scanned document or contain only images. "
+                    "Try tunning it through an OCR tool first."
+                )
+            return pages
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(
+                "Could not read this PDF. It may be corrupted, not a real PDF file, "
+                "or contain only scanned images. Try opening it in Preview first to confirm it works."
+            )
         
     def _extract_docx(self, file_path: Path) -> List[dict]:
-        from docx import Document
-        doc = Document(str(file_path))
-        parts = []
+        try:
+            from docx import Document
+            from docx.opc.exceptions import PackageNotFoundError
+            try:
+                doc = Document(str(file_path))
+            except PackageNotFoundError:
+                raise ValueError(
+                    "This DOCX file appears to be corrupted or is not a valid Word document."
+                )
+            parts = []
 
-        for p in doc.paragraphs:
-            if p.text.strip():
-                parts.append(p.text.strip())
+            for p in doc.paragraphs:
+                if p and p.text and p.text.strip():
+                    parts.append(p.text.strip())
 
-        for table in doc.tables:
-            for row in table.rows:
-                seen = []
-                for cell in row.cells:
-                    text = cell.text.strip()
-                    if text and text not in seen:
-                        seen.append(text)
-                if seen:
-                    parts.append(' | '.join(seen))
+            for table in (doc.tables or []):
+                if not table:
+                    continue
+                for row in (table.rows or []):
+                    if not row:
+                        continue
+                    seen = []
+                    for cell in (row.cells or []):
+                        if not cell:
+                            continue
+                        text = cell.text.strip() if cell.text else ""
+                        if text and text not in seen:
+                            seen.append(text)
+                    if seen:
+                        parts.append(' | '.join(seen))
 
-        return [{"page_number": 1, "text": self._clean_text("\n".join(parts))}]
+            if not parts:
+                raise ValueError(
+                    "No text could be extracted from this Word document. "
+                    "It may be empty or contain only images."
+                )
+            full_text = "\n".join(parts)
+            return [{"page_number": 1, "text": self._clean_text(full_text)}]
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Could not read DOCX: {str(e)}")
         
     def _extract_txt(self, file_path: Path) -> List[dict]:
-        import chardet
-        raw = file_path.read_bytes()
-        encoding = chardet.detect(raw)["encoding"] or "utf-8"
-        text = raw.decode(encoding)
-        return [{"page_number": 1, "text": self._clean_text(text)}]
+        try:
+            import chardet
+            raw = file_path.read_bytes()
+            if not raw.strip():
+                raise ValueError("This text file is empty.")
+            detected = chatdet.detect(raw)
+            encoding = detected.get("encoding") or "utf-8"
+            confidence = detected.get("confidence") or 0
+            if confidence < 0.5:
+                encoding = "utf-8"
+            try:
+                text = raw.decode(encoding)
+            except (UnicodeDecodeError, LookupError):
+                raise ValueError("This text file contains no readable text.")
+            return [{"page_number": 1, "text": self._clean_text(text)}]
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Could not read TXT file: {str(e)}")
+
         
     # ---------------------------------------------------------------------------------------------------------
     # Clean the text

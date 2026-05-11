@@ -15,7 +15,7 @@ def query_knowledge_base(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     
     try:
-        response = rag.answer(request.question, request.top_k)
+        response = rag.answer(request.question, request.top_k, request.document_id)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {str(e)}")

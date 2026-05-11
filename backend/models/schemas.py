@@ -25,6 +25,7 @@ class QueryRequest(BaseModel):
     """ A user question sent to the RAG engine. """
     question: str
     top_k: Optional[int] = 5
+    document_id: Optional[str] = None
 
 class SourceCitation(BaseModel):
     """ A source that was used to answer a question. """

@@ -2,10 +2,28 @@ import anthropic
 import chromadb 
 from chromadb.config import Settings as ChromaSettings
 from typing import List
+from datetime import datetime
 
 from services.embeddings import EmbeddingService
 from models.schemas import DocumentChunk, DocumentMetadata, SourceCitation, QueryResponse
 from config import settings
+
+def _get_langfuse():
+    """
+    Returns a Langfuse client if keys are configured, otherwise None.
+    This way the app works fine even without Langfuse keys set.
+    """
+    if not settings.langufuse_public_key or not settings.langfuse_secret_key:
+        return None
+    try:
+        from langfuse import Langfuse
+        return Langfuse(
+            public_key=settings.langufuse_public_key,
+            secret_key=settings.langfuse_secret_key,
+            host=settings.langfuse_host,
+        )
+    except Exception:
+        return None
 
 class RAGEngine:
     """
@@ -28,8 +46,13 @@ class RAGEngine:
         )
 
         self.claude = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        self.langfuse = _get_langfuse()
 
         print(f"ChromaDB ready. Total chunks stored: {self.collection.count()}")
+        if self.langfuse:
+            print("Langfuse observability enabled.")
+        else:
+            print("Langfuse not configured - running without observability.")
     
     # ------------------------------------------------------------------------------------
     # STORE: add a document's chunks to the vector database
@@ -70,9 +93,10 @@ class RAGEngine:
     # SEARCH: find the most relevant chunks for a question
     # ------------------------------------------------------------------------------------
 
-    def search(self, question: str, top_k: int = None) -> List[SourceCitation]:
+    def search(self, question: str, top_k: int = None, document_id: str = None) -> List[SourceCitation]:
         """
         Embeds the question and finds the closest matching chunks in the DB.
+        If document_id is provided, only searches within that document.
         For small libraries (<=50 chunks), retrieves everything.
         For larger libraries, retrieves top_k most relevant chunks.
         """
@@ -80,22 +104,35 @@ class RAGEngine:
 
         if self.collection.count() == 0:
             return []
+        
+        where = {"document_id": document_id} if document_id else None
 
-        total_chunks = self.collection.count()
+        if where:
+            scoped = self.collection.get(where=where, include=["metadatas"])
+            total_in_scope = len(scoped["ids"])
+        else:
+            total_in_scope = self.collection.count()
+        
+        if total_in_scope == 0:
+            return []
 
         # For small document libraries, retrieve everything so nothing gets missed.
         # For large libraries, use semantic search to find the most relevant chunks.
-        n_results = total_chunks if total_chunks <= 50 else min(top_k, total_chunks)
+        n_results = total_in_scope if total_in_scope <= 50 else min(top_k, total_in_scope)
 
         # Embed the question using the same model as the chunks
         question_embedding = self.embedding_service.embed_text(question)
 
+        query_kwargs = {
+            "query_embeddings": [question_embedding],
+            "n_results": n_results,
+            "include": ["documents", "metadatas", "distances"]
+        }
+        if where:
+            query_kwargs["where"] = where
+
         # Search ChromaDB for the closest vectors
-        results = self.collection.query(
-            query_embeddings=[question_embedding],
-            n_results=n_results,
-            include=["documents", "metadatas", "distances"]
-        )
+        results = self.collection.query(**query_kwargs)
 
         # Convert raw results into SourceCitation objects
         citations = []
@@ -153,24 +190,55 @@ class RAGEngine:
     # ANWSER: search + generate a cited answer with Claude
     # ------------------------------------------------------------------------------------
 
-    def answer(self, question: str, top_k: int = None) -> QueryResponse:
+    def answer(self, question: str, top_k: int = None, document_id: str = None) -> QueryResponse:
         """
         Full RAG pipeline:
         1. search for relevant chunks
         2. build a prompt with those chunks as context
         3. ask Claude to answer using only that context
         4. return the answer + source citations
+
+        *if document_id is procided, restricts search to that document only
         """
+        start_time = datetime.now()
+
+        trace = None
+        if self.langfuse:
+            trace = self.langfuse.trace(
+                name="rag-query",
+                input={"question": question, "document_filter": document_id},
+                metadata={"model": settings.claude_model}
+            )
+        
+        # --- SPAN 1: Retrieval ---
+        retrieval_span = None
+        if trace:
+            retrieval_span = trace.span(
+                name="retrieval",
+                input={"question": question, "document_id": document_id}
+            )
         
         # step 1: find relevant chunks
-        citations = self.search(question, top_k)
+        citations = self.search(question, top_k, document_id)
 
+        if retrieval_span:
+            retrieval_span.end(output={
+                "chunks_retrieved": len(citations),
+                "top_score": max((c.relevance_score for c in citations), default=0),
+                "sources": [c.filename for c in citations]
+            })
+        
+        # handle no results
         if not citations:
-            return QueryResponse(
-                question=question,
-                answer="I don't have any documents in my knowledge base yet. Please upload some documents first.",
-                sources=[]
+            msg = (
+                "I couldn't find anything relevant in that document. Try rephrasing or searching all documents."
+                if document_id else
+                "I don't have any documents in my knowledge base yet. Please upload some documents first."
             )
+            if trace:
+                trace.update(output={"answer": msg, "sources": 0})
+                self.langfuse.flush()
+            return QueryResponse(question=question, answer=msg, sources=[])
         
         # step 2: build context block from the retrieved chunks
         context_blocks = []
@@ -199,6 +267,16 @@ class RAGEngine:
         - Do not make up information not present in the sources
         """
 
+        # --- SPAN 2: Generation ---
+        generation_span = None
+        if trace:
+            generation_span = trace.generation(
+                name="claude-generation",
+                model=settings.claude_model,
+                input=prompt,
+                metadata={"num_sources": len(citations)}
+            )
+
         # step 4: call Claude
         message = self.claude.messages.create(
             model=settings.claude_model,
@@ -207,6 +285,29 @@ class RAGEngine:
         )
 
         answer_text = message.content[0].text
+        latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+
+        if generation_span:
+            generation_span.end(
+                output=answer_text,
+                usage={
+                    "input": message.usage.input_tokens,
+                    "output": message.usage.output_tokens,
+                }
+            )
+        
+        #update the top-level trace with final output
+        if frace:
+            trace.update(
+                output={
+                    "answer": answer_text,
+                    "sources_used": len(citations),
+                    "latency_ms": latency_ms,
+                    "input_tokens": message.usage.input_tokens,
+                    "output_tokens": message.output_tokens,
+                }
+            )
+            self.langfuse.flush()
 
         return QueryResponse(
             question=question,

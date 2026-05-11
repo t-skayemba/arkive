@@ -19,3 +19,5 @@ anthropic>=0.40.0
 # Utilities
 python-dotenv==1.0.1
 aiofiles==24.1.0
+
+langfuse>=2.0.0

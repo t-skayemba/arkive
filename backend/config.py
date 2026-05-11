@@ -7,14 +7,19 @@ class Settings(BaseSettings):
     # API Keys
     anthropic_api_key: str = ""
 
+    # Langfuse Observability
+    langufuse_public_key: str = ""
+    langfuse_secret_key: str = ""
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     # Paths
     upload_dir: Path = BASE_DIR / "data" / "uploads"
     chroma_db_dir: Path = BASE_DIR / "data" / "chroma_db"
 
     # RAG Settings
-    chunk_size: int = 800
-    chunk_overlap: int = 100
-    top_k_results: int = 7
+    chunk_size: int = 600
+    chunk_overlap: int = 150
+    top_k_results: int = 25
     embedding_model: str = "all-MiniLM-L6-v2"
 
     # Claude Settings
