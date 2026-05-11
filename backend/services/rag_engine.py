@@ -297,7 +297,7 @@ class RAGEngine:
             )
         
         #update the top-level trace with final output
-        if frace:
+        if trace:
             trace.update(
                 output={
                     "answer": answer_text,
