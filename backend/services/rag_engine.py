@@ -9,20 +9,19 @@ from models.schemas import DocumentChunk, DocumentMetadata, SourceCitation, Quer
 from config import settings
 
 def _get_langfuse():
-    """
-    Returns a Langfuse client if keys are configured, otherwise None.
-    This way the app works fine even without Langfuse keys set.
-    """
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
         return None
     try:
         from langfuse import Langfuse
-        return Langfuse(
+        client = Langfuse(
             public_key=settings.langfuse_public_key,
             secret_key=settings.langfuse_secret_key,
             host=settings.langfuse_host,
         )
-    except Exception:
+        client.auth_check()
+        return client
+    except Exception as e:
+        print(f"Langfuse init error: {e}")
         return None
 
 class RAGEngine:
@@ -191,56 +190,20 @@ class RAGEngine:
     # ------------------------------------------------------------------------------------
 
     def answer(self, question: str, top_k: int = None, document_id: str = None) -> QueryResponse:
-        """
-        Full RAG pipeline:
-        1. search for relevant chunks
-        2. build a prompt with those chunks as context
-        3. ask Claude to answer using only that context
-        4. return the answer + source citations
-
-        *if document_id is procided, restricts search to that document only
-        """
         start_time = datetime.now()
 
-        trace = None
-        if self.langfuse:
-            trace = self.langfuse.trace(
-                name="rag-query",
-                input={"question": question, "document_filter": document_id},
-                metadata={"model": settings.claude_model}
-            )
-        
-        # --- SPAN 1: Retrieval ---
-        retrieval_span = None
-        if trace:
-            retrieval_span = trace.span(
-                name="retrieval",
-                input={"question": question, "document_id": document_id}
-            )
-        
-        # step 1: find relevant chunks
+        # Step 1: Retrieve
         citations = self.search(question, top_k, document_id)
 
-        if retrieval_span:
-            retrieval_span.end(output={
-                "chunks_retrieved": len(citations),
-                "top_score": max((c.relevance_score for c in citations), default=0),
-                "sources": [c.filename for c in citations]
-            })
-        
-        # handle no results
         if not citations:
             msg = (
                 "I couldn't find anything relevant in that document. Try rephrasing or searching all documents."
                 if document_id else
                 "I don't have any documents in my knowledge base yet. Please upload some documents first."
             )
-            if trace:
-                trace.update(output={"answer": msg, "sources": 0})
-                self.langfuse.flush()
             return QueryResponse(question=question, answer=msg, sources=[])
-        
-        # step 2: build context block from the retrieved chunks
+
+        # Step 2: Build context
         context_blocks = []
         for i, citation in enumerate(citations):
             context_blocks.append(
@@ -249,35 +212,24 @@ class RAGEngine:
             )
         context = "\n\n".join(context_blocks)
 
-        # step 3: build the prompt
         prompt = f"""You are a helpful assistant for a business knowledge base.
-        Answer the user's question using ONLY the source documents provided below.
-        If the answer isn't in the sources, say "I couldn't find that in the uploaded documents."
+    Answer the user's question using ONLY the source documents provided below.
+    If the answer isn't in the sources, say "I couldn't find that in the uploaded documents."
 
-        SOURCES:
-        {context}
+    SOURCES:
+    {context}
 
-        QUESTION:
-        {question}
+    QUESTION:
+    {question}
 
-        INSTRUCTIONS:
-        - Answer clearly and professionally
-        - Reference sources by their number e.g. [Source 1], [Source 2]
-        - If multiple sources support the answer, cite all of them
-        - Do not make up information not present in the sources
-        """
+    INSTRUCTIONS:
+    - Answer clearly and professionally
+    - Reference sources by their number e.g. [Source 1], [Source 2]
+    - If multiple sources support the answer, cite all of them
+    - Do not make up information not present in the sources
+    """
 
-        # --- SPAN 2: Generation ---
-        generation_span = None
-        if trace:
-            generation_span = trace.generation(
-                name="claude-generation",
-                model=settings.claude_model,
-                input=prompt,
-                metadata={"num_sources": len(citations)}
-            )
-
-        # step 4: call Claude
+        # Step 3: Call Claude
         message = self.claude.messages.create(
             model=settings.claude_model,
             max_tokens=settings.max_tokens,
@@ -287,27 +239,35 @@ class RAGEngine:
         answer_text = message.content[0].text
         latency_ms = int((datetime.now() - start_time).total_seconds() * 1000)
 
-        if generation_span:
-            generation_span.end(
-                output=answer_text,
-                usage={
-                    "input": message.usage.input_tokens,
-                    "output": message.usage.output_tokens,
-                }
-            )
-        
-        #update the top-level trace with final output
-        if trace:
-            trace.update(
-                output={
-                    "answer": answer_text,
-                    "sources_used": len(citations),
-                    "latency_ms": latency_ms,
-                    "input_tokens": message.usage.input_tokens,
-                    "output_tokens": message.output_tokens,
-                }
-            )
-            self.langfuse.flush()
+        # Step 4: Log to Langfuse using v4 API
+        try:
+            if self.langfuse:
+                with self.langfuse.start_as_current_observation(
+                    name="rag-query",
+                    input={"question": question, "document_filter": document_id},
+                ):
+                    self.langfuse.update_current_span(
+                        output={
+                            "answer": answer_text,
+                            "sources_used": len(citations),
+                            "latency_ms": latency_ms,
+                        }
+                    )
+                    with self.langfuse.start_as_current_observation(
+                        name="claude-generation",
+                        model=settings.claude_model,
+                        input=prompt,
+                    ):
+                        self.langfuse.update_current_generation(
+                            output=answer_text,
+                            usage_details={
+                                "input": message.usage.input_tokens,
+                                "output": message.usage.output_tokens,
+                            }
+                        )
+                self.langfuse.flush()
+        except Exception as e:
+            print(f"Langfuse logging error: {e}")
 
         return QueryResponse(
             question=question,

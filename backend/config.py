@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # Langfuse Observability
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
-    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_host: str = "https://us.cloud.langfuse.com"
 
     # Paths
     upload_dir: Path = BASE_DIR / "data" / "uploads"
