@@ -3,10 +3,14 @@ import chromadb
 from chromadb.config import Settings as ChromaSettings
 from typing import List
 from datetime import datetime
+from fastapi import HTTPException
 
 from services.embeddings import EmbeddingService
 from models.schemas import DocumentChunk, DocumentMetadata, SourceCitation, QueryResponse
 from config import settings
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 def _get_langfuse():
     if not settings.langfuse_public_key or not settings.langfuse_secret_key:
@@ -21,7 +25,7 @@ def _get_langfuse():
         client.auth_check()
         return client
     except Exception as e:
-        print(f"Langfuse init error: {e}")
+        logger.error(f"Langfuse init error: {e}")
         return None
 
 class RAGEngine:
@@ -47,11 +51,11 @@ class RAGEngine:
         self.claude = anthropic.Anthropic(api_key=settings.anthropic_api_key)
         self.langfuse = _get_langfuse()
 
-        print(f"ChromaDB ready. Total chunks stored: {self.collection.count()}")
+        logger.info(f"ChromaDB ready. Total chunks stored: {self.collection.count()}")
         if self.langfuse:
-            print("Langfuse observability enabled.")
+            logger.info("Langfuse observability enabled.")
         else:
-            print("Langfuse not configured - running without observability.")
+            logger.warning("Langfuse not configured - running without observability.")
     
     # ------------------------------------------------------------------------------------
     # STORE: add a document's chunks to the vector database
@@ -64,7 +68,7 @@ class RAGEngine:
         if not chunks:
             return
         
-        print(f"Embedding {len(chunks)} chunks from '{metadata.filename}'...")
+        logger.info(f"Embedding {len(chunks)} chunks from '{metadata.filename}'...")
 
         # embed all chunks in one batch
         texts = [chunk.content for chunk in chunks]
@@ -86,7 +90,7 @@ class RAGEngine:
             ]
         )
 
-        print(f"Stored {len(chunks)} chunks. Total in DB: {self.collection.count()}")
+        logger.info(f"Stored {len(chunks)} chunks. Total in DB: {self.collection.count()}")
     
     # ------------------------------------------------------------------------------------
     # SEARCH: find the most relevant chunks for a question
@@ -267,7 +271,7 @@ class RAGEngine:
                         )
                 self.langfuse.flush()
         except Exception as e:
-            print(f"Langfuse logging error: {e}")
+            logger.error(f"Langfuse logging error: {e}")
 
         return QueryResponse(
             question=question,

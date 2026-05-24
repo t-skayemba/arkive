@@ -6,10 +6,12 @@ from fastapi.responses import JSONResponse
 from services.document_processor import DocumentProcessor
 from services.rag_engine import RAGEngine
 from config import settings
+from utils.logger import get_logger
 
 router = APIRouter()
 processor = DocumentProcessor()
 rag = RAGEngine()
+logger = get_logger(__name__)
 
 ALLOWED_TYPES = {".pdf", ".docx", ".txt"}
 MAX_FILE_SIZE_MB = 20
@@ -40,6 +42,8 @@ async def upload_document(file: UploadFile = File(...)):
             status_code=400,
             detail=f"File size is {size_mb}MB - maximum allowed is {MAX_FILE_SIZE_MB}MB."
         )
+
+    logger.info(f"Upload received: '{file.filename}' ({round(len(file_bytes)/1024, 1)}KB)")
     
     if suffix == ".pdf":
         _check_pdf_not_encrypted(file_bytes)
@@ -55,9 +59,11 @@ async def upload_document(file: UploadFile = File(...)):
         metadata, chunks = processor.process_file(save_path, file.filename)
     except ValueError as e:
         save_path.unlink(missing_ok=True)
+        logger.warning(f"Upload rejected '{file.filename}': {str(e)}")
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         save_path.unlink(missing_ok=True)
+        logger.error(f"Processing failed '{file.filename}': {str(e)}")
         raise HTTPException(status_code=422, detail=f"Could not extract text from '{file.filename}'. The file may be corrupted, scanned, or contain only images. Details: {str(e)}")
 
     if not chunks:
@@ -69,8 +75,10 @@ async def upload_document(file: UploadFile = File(...)):
     
     try:
         rag.add_document(chunks, metadata)
+        logger.info(f"Successfully indexed '{file.filename}' — {metadata.total_chunks} chunks")
     except Exception as e:
         save_path.unlink(missing_ok=True)
+        logger.error(f"Indexing failed '{file.filename}': {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to index document: {str(e)}")
     
     return {
@@ -105,9 +113,10 @@ def list_documents():
 
 @router.delete("/{document_id}")
 def delete_document(document_id: str):
-    deleted_count = rag.delete_document(document_id)
+    logger.info(f"Deleted document {document_id} — {deleted_count} chunks removed")
     if deleted_count == 0:
         raise HTTPException(status_code=404, detail="Document not found")
+    deleted_count = rag.delete_document(document_id)
     return {"message": f"Deleted document and {deleted_count} chunks"}
 
 

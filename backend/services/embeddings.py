@@ -1,5 +1,8 @@
 from sentence_transformers import SentenceTransformer
 from config import settings
+from utils.logger import get_logger
+
+logger=get_logger(__name__)
 
 class EmbeddingService:
     """
@@ -8,9 +11,9 @@ class EmbeddingService:
     """
 
     def __init__(self):
-        print(f"Loading embedding model: {settings.embedding_model}")
+        logger.info(f"Loading embedding model: {settings.embedding_model}")
         self.model = SentenceTransformer(settings.embedding_model)
-        print("Embedding model ready.")
+        logger.info("Embedding model ready")
     
     def embed_text(self, text: str) -> list[float]:
         """ Convert a single string into a vector. """
